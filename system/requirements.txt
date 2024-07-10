@@ -4,3 +4,4 @@ requests-unixsocket
 python-swiftclient
 flake8
 termcolor
+zipp>=3.19.1 # not directly required, pinned by Snyk to avoid a vulnerability
