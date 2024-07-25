@@ -155,7 +155,7 @@ func maybeRunTaskInBackground(c *gin.Context, name string, resources []string, p
 	// Run this task in background if configured globally or per-request
 	background := truthy(c.DefaultQuery("_async", strconv.FormatBool(context.Config().AsyncAPI)))
 	if background {
-		log.Info().Msg("Executing task asynchronously")
+		log.Debug().Msg("Executing task asynchronously")
 		task, conflictErr := runTaskInBackground(name, resources, proc)
 		if conflictErr != nil {
 			AbortWithJSONError(c, 409, conflictErr)
@@ -163,10 +163,18 @@ func maybeRunTaskInBackground(c *gin.Context, name string, resources []string, p
 		}
 		c.JSON(202, task)
 	} else {
-		log.Info().Msg("Executing task synchronously")
-		out := context.Progress()
-		detail := task.Detail{}
-		retValue, err := proc(out, &detail)
+		log.Debug().Msg("Executing task synchronously")
+		task, conflictErr := runTaskInBackground(name, resources, proc)
+		if conflictErr != nil {
+			AbortWithJSONError(c, 409, conflictErr)
+			return
+		}
+
+		// wait for task to finish
+		context.TaskList().WaitForTaskByID(task.ID)
+
+		retValue, _ := context.TaskList().GetTaskReturnValueByID(task.ID)
+		err, _ := context.TaskList().GetTaskErrorByID(task.ID)
 		if err != nil {
 			AbortWithJSONError(c, retValue.Code, err)
 			return
@@ -224,6 +232,36 @@ func showPackages(c *gin.Context, reflist *deb.PackageRefList, collectionFactory
 			AbortWithJSONError(c, 500, fmt.Errorf("unable to search: %s", err))
 			return
 		}
+	}
+
+	// filter packages by version
+	if c.Request.URL.Query().Get("maximumVersion") == "1" {
+		list.PrepareIndex()
+		list.ForEach(func(p *deb.Package) error {
+			versionQ, err := query.Parse(fmt.Sprintf("Name (%s), $Version (<= %s)", p.Name, p.Version))
+			if err != nil {
+				fmt.Println("filter packages by version, query string parse err: ", err)
+				c.AbortWithError(500, fmt.Errorf("unable to parse %s maximum version query string: %s", p.Name, err))
+			} else {
+				tmpList, err := list.Filter([]deb.PackageQuery{versionQ}, false,
+					nil, 0, []string{})
+
+				if err == nil {
+					if tmpList.Len() > 0 {
+						tmpList.ForEach(func(tp *deb.Package) error {
+							list.Remove(tp)
+							return nil
+						})
+						list.Add(p)
+					}
+				} else {
+					fmt.Println("filter packages by version, filter err: ", err)
+					c.AbortWithError(500, fmt.Errorf("unable to get %s maximum version: %s", p.Name, err))
+				}
+			}
+
+			return nil
+		})
 	}
 
 	if c.Request.URL.Query().Get("format") == "details" {

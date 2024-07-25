@@ -7,17 +7,23 @@ from api_lib import APITest
 
 
 def check_gpgkey_exists(gpg_key, keyring):
-    subprocess.check_call([
+    p = subprocess.Popen([
         "gpg", "--no-default-keyring",
         "--keyring", keyring,
-        "--fingerprint", gpg_key,
-    ])
+        "--fingerprint", gpg_key],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    p.communicate()
+    if p.returncode != 0:
+        raise Exception("gpg key does not exists")
 
 
 class GPGAPITestAddKey(APITest):
     """
     POST /gpg/key
     """
+    requiresGPG2 = True
 
     def check(self):
         with tempfile.NamedTemporaryFile(suffix=".pub") as keyring:

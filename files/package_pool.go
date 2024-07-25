@@ -5,10 +5,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"syscall"
 
 	"github.com/pborman/uuid"
+	"github.com/saracen/walker"
 
 	"github.com/aptly-dev/aptly/aptly"
 	"github.com/aptly-dev/aptly/utils"
@@ -30,8 +32,7 @@ var (
 
 // NewPackagePool creates new instance of PackagePool which specified root
 func NewPackagePool(root string, supportLegacyPaths bool) *PackagePool {
-	rootPath := filepath.Join(root, "pool")
-	rootPath, err := filepath.Abs(rootPath)
+	rootPath, err := filepath.Abs(root)
 	if err != nil {
 		panic(err)
 	}
@@ -98,13 +99,13 @@ func (pool *PackagePool) FilepathList(progress aptly.Progress) ([]string, error)
 	}
 
 	result := []string{}
+	resultLock := &sync.Mutex{}
 
 	for _, dir := range dirs {
-		err = filepath.Walk(filepath.Join(pool.rootPath, dir.Name()), func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
+		err = walker.Walk(filepath.Join(pool.rootPath, dir.Name()), func(path string, info os.FileInfo) error {
 			if !info.IsDir() {
+				resultLock.Lock()
+				defer resultLock.Unlock()
 				result = append(result, path[len(pool.rootPath)+1:])
 			}
 			return nil
@@ -118,6 +119,7 @@ func (pool *PackagePool) FilepathList(progress aptly.Progress) ([]string, error)
 		}
 	}
 
+	sort.Strings(result)
 	return result, nil
 }
 
@@ -375,6 +377,15 @@ func (pool *PackagePool) Import(srcPath, basename string, checksums *utils.Check
 	}
 
 	return poolPath, err
+}
+
+func (pool *PackagePool) Size(path string) (size int64, err error) {
+	stat, err := pool.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+
+	return stat.Size(), nil
 }
 
 // Open returns io.ReadCloser to access the file

@@ -7,14 +7,20 @@ PYTHON?=python3
 TESTS?=
 BINPATH?=$(GOPATH)/bin
 RUN_LONG_TESTS?=yes
+GOLANGCI_LINT_VERSION=v1.56.2
 COVERAGE_DIR?=$(shell mktemp -d)
 # Uncomment to update test outputs
 # CAPTURE := "--capture"
 
 all: modules test bench check system-test
 
+# Self-documenting Makefile
+# https://marmelab.com/blog/2016/02/29/auto-documented-makefile.html
+help:  ## Print this help
+	@grep -E '^[a-zA-Z][a-zA-Z0-9_-]*:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
+
 prepare:
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(shell go env GOPATH)/bin v1.51.2
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(shell go env GOPATH)/bin $(GOLANGCI_LINT_VERSION)
 
 modules:
 	go mod download
@@ -28,13 +34,14 @@ dev:
 
 check: system/env
 ifeq ($(RUN_LONG_TESTS), yes)
-	golangci-lint run
 	system/env/bin/flake8
 endif
 
 install:
+	@echo Building aptly ...
 	go generate
-	go install -v
+	@echo go install -v
+	@out=`mktemp`; if ! go install -v > $$out 2>&1; then cat $$out; rm -f $$out; echo "\nBuild failed\n"; exit 1; else rm -f $$out; fi
 
 system/env: system/requirements.txt
 ifeq ($(RUN_LONG_TESTS), yes)
@@ -49,8 +56,17 @@ ifeq ($(RUN_LONG_TESTS), yes)
 	go test -v -coverpkg="./..." -c -tags testruncli
 	if [ ! -e ~/aptly-fixture-db ]; then git clone https://github.com/aptly-dev/aptly-fixture-db.git ~/aptly-fixture-db/; fi
 	if [ ! -e ~/aptly-fixture-pool ]; then git clone https://github.com/aptly-dev/aptly-fixture-pool.git ~/aptly-fixture-pool/; fi
-	PATH=$(BINPATH)/:$(PATH) && . system/env/bin/activate && APTLY_VERSION=$(VERSION) $(PYTHON) system/run.py --long $(TESTS) --coverage-dir $(COVERAGE_DIR) $(CAPTURE)
+	PATH=$(BINPATH)/:$(PATH) && . system/env/bin/activate && APTLY_VERSION=$(VERSION) FORCE_COLOR=1 $(PYTHON) system/run.py --long $(TESTS) --coverage-dir $(COVERAGE_DIR) $(CAPTURE)
 endif
+
+docker-test: install
+	@echo Building aptly.test ...
+	@rm -f aptly.test
+	go test -v -coverpkg="./..." -c -tags testruncli
+	@echo Running python tests ...
+	export PATH=$(BINPATH)/:$(PATH); \
+	export APTLY_VERSION=$(VERSION); \
+	$(PYTHON) system/run.py --long $(TESTS) --coverage-dir $(COVERAGE_DIR) $(CAPTURE) $(TEST)
 
 test:
 	go test -v ./... -gocheck.v=true -coverprofile=unit.out
@@ -78,16 +94,25 @@ release: goxc
 	mkdir -p build/
 	mv xc-out/$(VERSION)/aptly_$(VERSION)_* build/
 
-man:
+man:  ## Create man pages
 	make -C man
 
-version:
+version:  ## Print aptly version
 	@echo $(VERSION)
 
-docker-build:
-	docker build -f system/Dockerfile --no-cache . -t aptly-system-test
+docker-build-system-tests:  ## Build system-test docker image
+	docker build -f system/Dockerfile . -t aptly-system-test
 
-docker-system-tests:
-	docker run --rm -it -v ${PWD}:/app aptly-system-test
+docker-unit-tests:  ## Run unit tests in docker container
+	docker run -it --rm -v ${PWD}:/app aptly-system-test go test -v ./... -gocheck.v=true
 
-.PHONY: man modules version release goxc docker-build docker-system-tests
+docker-system-tests:  ## Run system tests in docker container (add TEST=t04_mirror to run only specific tests)
+	docker run -it --rm -v ${PWD}:/app aptly-system-test /app/system/run-system-tests $(TEST)
+
+golangci-lint:  ## Run golangci-line in docker container
+	docker run -it --rm -v ~/.cache/golangci-lint/$(GOLANGCI_LINT_VERSION):/root/.cache -v ${PWD}:/app -w /app golangci/golangci-lint:$(GOLANGCI_LINT_VERSION) golangci-lint run
+
+flake8:
+	flake8 system
+
+.PHONY: help man modules version release goxc docker-build docker-system-tests

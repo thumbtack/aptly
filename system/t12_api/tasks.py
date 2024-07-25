@@ -1,4 +1,4 @@
-from api_lib import TASK_SUCCEEDED, APITest
+from api_lib import APITest
 
 from .publish import DefaultSigningOptions
 
@@ -20,9 +20,9 @@ class TaskAPITestParallelTasks(APITest):
         resp = self.put("/api/mirrors/" + mirror_name, json=mirror_desc, params={'_async': True})
         self.check_equal(resp.status_code, 202)
 
-        # check that two mirror updates cannot run at the same time
+        # check that two mirror updates are queuedd
         resp2 = self.put("/api/mirrors/" + mirror_name, json=mirror_desc, params={'_async': True})
-        self.check_equal(resp2.status_code, 409)
+        self.check_equal(resp2.status_code, 202)
 
         return resp.json()['ID'], mirror_name
 
@@ -49,9 +49,8 @@ class TaskAPITestParallelTasks(APITest):
 
     def _wait_for_task(self, task_id):
         uri = "/api/tasks/%d/wait" % int(task_id)
-        resp = self.get(uri)
-        self.check_equal(resp.status_code, 200)
-        self.check_equal(resp.json()['State'], TASK_SUCCEEDED)
+        task = self.get(uri)
+        self.check_task(task)
 
     def _wait_for_all_tasks(self):
         resp = self.get("/api/tasks-wait")
@@ -103,6 +102,5 @@ class TaskAPITestParallelTasks(APITest):
         self._wait_for_all_tasks()
 
         for publish_task_id in publish_task_ids:
-            resp = self.get("/api/tasks/%d" % publish_task_id)
-            self.check_equal(resp.status_code, 200)
-            self.check_equal(resp.json()['State'], TASK_SUCCEEDED)
+            task = self.get("/api/tasks/%d" % publish_task_id)
+            self.check_task(task)

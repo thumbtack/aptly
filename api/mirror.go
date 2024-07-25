@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -16,17 +17,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func getVerifier(ignoreSignatures bool, keyRings []string) (pgp.Verifier, error) {
-	if ignoreSignatures {
-		return nil, nil
-	}
-
+func getVerifier(keyRings []string) (pgp.Verifier, error) {
 	verifier := context.GetVerifier()
 	for _, keyRing := range keyRings {
 		verifier.AddKeyring(keyRing)
 	}
 
-	err := verifier.InitKeyring()
+	err := verifier.InitKeyring(false)
 	if err != nil {
 		return nil, err
 	}
@@ -52,19 +49,20 @@ func apiMirrorsList(c *gin.Context) {
 func apiMirrorsCreate(c *gin.Context) {
 	var err error
 	var b struct {
-		Name               string `binding:"required"`
-		ArchiveURL         string `binding:"required"`
-		Distribution       string
-		Filter             string
-		Components         []string
-		Architectures      []string
-		Keyrings           []string
-		DownloadSources    bool
-		DownloadUdebs      bool
-		DownloadInstaller  bool
-		FilterWithDeps     bool
-		SkipComponentCheck bool
-		IgnoreSignatures   bool
+		Name                  string `binding:"required"`
+		ArchiveURL            string `binding:"required"`
+		Distribution          string
+		Filter                string
+		Components            []string
+		Architectures         []string
+		Keyrings              []string
+		DownloadSources       bool
+		DownloadUdebs         bool
+		DownloadInstaller     bool
+		FilterWithDeps        bool
+		SkipComponentCheck    bool
+		SkipArchitectureCheck bool
+		IgnoreSignatures      bool
 	}
 
 	b.DownloadSources = context.Config().DownloadSourcePackages
@@ -105,17 +103,18 @@ func apiMirrorsCreate(c *gin.Context) {
 	repo.Filter = b.Filter
 	repo.FilterWithDeps = b.FilterWithDeps
 	repo.SkipComponentCheck = b.SkipComponentCheck
+	repo.SkipArchitectureCheck = b.SkipArchitectureCheck
 	repo.DownloadSources = b.DownloadSources
 	repo.DownloadUdebs = b.DownloadUdebs
 
-	verifier, err := getVerifier(b.IgnoreSignatures, b.Keyrings)
+	verifier, err := getVerifier(b.Keyrings)
 	if err != nil {
 		AbortWithJSONError(c, 400, fmt.Errorf("unable to initialize GPG verifier: %s", err))
 		return
 	}
 
 	downloader := context.NewDownloader(nil)
-	err = repo.Fetch(downloader, verifier)
+	err = repo.Fetch(downloader, verifier, b.IgnoreSignatures)
 	if err != nil {
 		AbortWithJSONError(c, 400, fmt.Errorf("unable to fetch mirror: %s", err))
 		return
@@ -147,7 +146,7 @@ func apiMirrorsDrop(c *gin.Context) {
 
 	resources := []string{string(repo.Key())}
 	taskName := fmt.Sprintf("Delete mirror %s", name)
-	maybeRunTaskInBackground(c, taskName, resources, func(out aptly.Progress, detail *task.Detail) (*task.ProcessReturnValue, error) {
+	maybeRunTaskInBackground(c, taskName, resources, func(_ aptly.Progress, _ *task.Detail) (*task.ProcessReturnValue, error) {
 		err := repo.CheckLock()
 		if err != nil {
 			return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to drop: %v", err)
@@ -275,20 +274,21 @@ func apiMirrorsUpdate(c *gin.Context) {
 	)
 
 	var b struct {
-		Name                 string
-		ArchiveURL           string
-		Filter               string
-		Architectures        []string
-		Components           []string
-		Keyrings             []string
-		FilterWithDeps       bool
-		DownloadSources      bool
-		DownloadUdebs        bool
-		SkipComponentCheck   bool
-		IgnoreChecksums      bool
-		IgnoreSignatures     bool
-		ForceUpdate          bool
-		SkipExistingPackages bool
+		Name                  string
+		ArchiveURL            string
+		Filter                string
+		Architectures         []string
+		Components            []string
+		Keyrings              []string
+		FilterWithDeps        bool
+		DownloadSources       bool
+		DownloadUdebs         bool
+		SkipComponentCheck    bool
+		SkipArchitectureCheck bool
+		IgnoreChecksums       bool
+		IgnoreSignatures      bool
+		ForceUpdate           bool
+		SkipExistingPackages  bool
 	}
 
 	collectionFactory := context.NewCollectionFactory()
@@ -304,12 +304,14 @@ func apiMirrorsUpdate(c *gin.Context) {
 	b.DownloadUdebs = remote.DownloadUdebs
 	b.DownloadSources = remote.DownloadSources
 	b.SkipComponentCheck = remote.SkipComponentCheck
+	b.SkipArchitectureCheck = remote.SkipArchitectureCheck
 	b.FilterWithDeps = remote.FilterWithDeps
 	b.Filter = remote.Filter
 	b.Architectures = remote.Architectures
 	b.Components = remote.Components
+	b.IgnoreSignatures = context.Config().GpgDisableVerify
 
-	log.Info().Msgf("%s: Starting mirror update\n", b.Name)
+	log.Info().Msgf("%s: Starting mirror update", b.Name)
 
 	if c.Bind(&b) != nil {
 		return
@@ -338,12 +340,13 @@ func apiMirrorsUpdate(c *gin.Context) {
 	remote.DownloadUdebs = b.DownloadUdebs
 	remote.DownloadSources = b.DownloadSources
 	remote.SkipComponentCheck = b.SkipComponentCheck
+	remote.SkipArchitectureCheck = b.SkipArchitectureCheck
 	remote.FilterWithDeps = b.FilterWithDeps
 	remote.Filter = b.Filter
 	remote.Architectures = b.Architectures
 	remote.Components = b.Components
 
-	verifier, err := getVerifier(b.IgnoreSignatures, b.Keyrings)
+	verifier, err := getVerifier(b.Keyrings)
 	if err != nil {
 		AbortWithJSONError(c, 400, fmt.Errorf("unable to initialize GPG verifier: %s", err))
 		return
@@ -353,7 +356,7 @@ func apiMirrorsUpdate(c *gin.Context) {
 	maybeRunTaskInBackground(c, "Update mirror "+b.Name, resources, func(out aptly.Progress, detail *task.Detail) (*task.ProcessReturnValue, error) {
 
 		downloader := context.NewDownloader(out)
-		err := remote.Fetch(downloader, verifier)
+		err := remote.Fetch(downloader, verifier, b.IgnoreSignatures)
 		if err != nil {
 			return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to update: %s", err)
 		}
@@ -365,7 +368,7 @@ func apiMirrorsUpdate(c *gin.Context) {
 			}
 		}
 
-		err = remote.DownloadPackageIndexes(out, downloader, verifier, collectionFactory, b.SkipComponentCheck)
+		err = remote.DownloadPackageIndexes(out, downloader, verifier, collectionFactory, b.IgnoreSignatures, b.SkipComponentCheck)
 		if err != nil {
 			return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to update: %s", err)
 		}
@@ -458,7 +461,7 @@ func apiMirrorsUpdate(c *gin.Context) {
 			}
 		}()
 
-		log.Info().Msgf("%s: Spawning background processes...\n", b.Name)
+		log.Info().Msgf("%s: Spawning background processes...", b.Name)
 		var wg sync.WaitGroup
 		for i := 0; i < context.Config().DownloadConcurrency; i++ {
 			wg.Add(1)
@@ -476,7 +479,16 @@ func apiMirrorsUpdate(c *gin.Context) {
 						var e error
 
 						// provision download location
-						task.TempDownPath, e = context.PackagePool().(aptly.LocalPackagePool).GenerateTempPath(task.File.Filename)
+						if pp, ok := context.PackagePool().(aptly.LocalPackagePool); ok {
+							task.TempDownPath, e = pp.GenerateTempPath(task.File.Filename)
+						} else {
+							var file *os.File
+							file, e = os.CreateTemp("", task.File.Filename)
+							if e == nil {
+								task.TempDownPath = file.Name()
+								file.Close()
+							}
+						}
 						if e != nil {
 							pushError(e)
 							continue
@@ -494,6 +506,20 @@ func apiMirrorsUpdate(c *gin.Context) {
 							continue
 						}
 
+						// and import it back to the pool
+						task.File.PoolPath, err = context.PackagePool().Import(task.TempDownPath, task.File.Filename, &task.File.Checksums, true, collectionFactory.ChecksumCollection(nil))
+						if err != nil {
+							//return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to import file: %s", err)
+							pushError(err)
+							continue
+						}
+
+						// update "attached" files if any
+						for _, additionalAtask := range task.Additional {
+							additionalAtask.File.PoolPath = task.File.PoolPath
+							additionalAtask.File.Checksums = task.File.Checksums
+						}
+
 						task.Done = true
 						taskFinished <- task
 					case <-context.Done():
@@ -505,32 +531,22 @@ func apiMirrorsUpdate(c *gin.Context) {
 		}
 
 		// Wait for all download goroutines to finish
-		log.Info().Msgf("%s: Waiting for background processes to finish...\n", b.Name)
+		log.Info().Msgf("%s: Waiting for background processes to finish...", b.Name)
 		wg.Wait()
-		log.Info().Msgf("%s: Background processes finished\n", b.Name)
+		log.Info().Msgf("%s: Background processes finished", b.Name)
 		close(taskFinished)
 
-		for idx := range queue {
+		defer func() {
+			for _, task := range queue {
+				if task.TempDownPath == "" {
+					continue
+				}
 
-			atask := &queue[idx]
-
-			if !atask.Done {
-				// download not finished yet
-				continue
+				if err := os.Remove(task.TempDownPath); err != nil && !os.IsNotExist(err) {
+					fmt.Fprintf(os.Stderr, "Failed to delete %s: %v\n", task.TempDownPath, err)
+				}
 			}
-
-			// and import it back to the pool
-			atask.File.PoolPath, err = context.PackagePool().Import(atask.TempDownPath, atask.File.Filename, &atask.File.Checksums, true, collectionFactory.ChecksumCollection(nil))
-			if err != nil {
-				return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to import file: %s", err)
-			}
-
-			// update "attached" files if any
-			for _, additionalAtask := range atask.Additional {
-				additionalAtask.File.PoolPath = atask.File.PoolPath
-				additionalAtask.File.Checksums = atask.File.Checksums
-			}
-		}
+		}()
 
 		select {
 		case <-context.Done():
@@ -539,18 +555,18 @@ func apiMirrorsUpdate(c *gin.Context) {
 		}
 
 		if len(errors) > 0 {
-			log.Info().Msgf("%s: Unable to update because of previous errors\n", b.Name)
+			log.Info().Msgf("%s: Unable to update because of previous errors", b.Name)
 			return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to update: download errors:\n  %s", strings.Join(errors, "\n  "))
 		}
 
-		log.Info().Msgf("%s: Finalizing download\n", b.Name)
+		log.Info().Msgf("%s: Finalizing download...", b.Name)
 		remote.FinalizeDownload(collectionFactory, out)
 		err = collectionFactory.RemoteRepoCollection().Update(remote)
 		if err != nil {
 			return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to update: %s", err)
 		}
 
-		log.Info().Msgf("%s: Mirror updated successfully!\n", b.Name)
+		log.Info().Msgf("%s: Mirror updated successfully", b.Name)
 		return &task.ProcessReturnValue{Code: http.StatusNoContent, Value: nil}, nil
 	})
 }

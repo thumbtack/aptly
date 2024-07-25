@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -173,7 +174,7 @@ func apiReposDrop(c *gin.Context) {
 
 	resources := []string{string(repo.Key())}
 	taskName := fmt.Sprintf("Delete repo %s", name)
-	maybeRunTaskInBackground(c, taskName, resources, func(out aptly.Progress, detail *task.Detail) (*task.ProcessReturnValue, error) {
+	maybeRunTaskInBackground(c, taskName, resources, func(_ aptly.Progress, _ *task.Detail) (*task.ProcessReturnValue, error) {
 		published := publishedCollection.ByLocalRepo(repo)
 		if len(published) > 0 {
 			return &task.ProcessReturnValue{Code: http.StatusConflict, Value: nil}, fmt.Errorf("unable to drop, local repo is published")
@@ -236,7 +237,7 @@ func apiReposPackagesAddDelete(c *gin.Context, taskNamePrefix string, cb func(li
 	}
 
 	resources := []string{string(repo.Key())}
-	maybeRunTaskInBackground(c, taskNamePrefix+repo.Name, resources, func(out aptly.Progress, detail *task.Detail) (*task.ProcessReturnValue, error) {
+	maybeRunTaskInBackground(c, taskNamePrefix+repo.Name, resources, func(out aptly.Progress, _ *task.Detail) (*task.ProcessReturnValue, error) {
 		out.Printf("Loading packages...\n")
 		list, err := deb.NewPackageListFromRefList(repo.RefList(), collectionFactory.PackageCollection(), nil)
 		if err != nil {
@@ -338,7 +339,7 @@ func apiReposPackageFromDir(c *gin.Context) {
 
 	resources := []string{string(repo.Key())}
 	resources = append(resources, sources...)
-	maybeRunTaskInBackground(c, taskName, resources, func(out aptly.Progress, detail *task.Detail) (*task.ProcessReturnValue, error) {
+	maybeRunTaskInBackground(c, taskName, resources, func(out aptly.Progress, _ *task.Detail) (*task.ProcessReturnValue, error) {
 		verifier := context.GetVerifier()
 
 		var (
@@ -414,6 +415,150 @@ func apiReposPackageFromDir(c *gin.Context) {
 	})
 }
 
+// POST /repos/:name/copy/:src/:file
+func apiReposCopyPackage(c *gin.Context) {
+	dstRepoName := c.Params.ByName("name")
+	srcRepoName := c.Params.ByName("src")
+	fileName := c.Params.ByName("file")
+
+	jsonBody := struct {
+		WithDeps bool `json:"with-deps,omitempty"`
+		DryRun   bool `json:"dry-run,omitempty"`
+	}{
+		WithDeps: false,
+		DryRun:   false,
+	}
+
+	err := c.Bind(&jsonBody)
+	if err != nil {
+		return
+	}
+
+	collectionFactory := context.NewCollectionFactory()
+	dstRepo, err := collectionFactory.LocalRepoCollection().ByName(dstRepoName)
+	if err != nil {
+		AbortWithJSONError(c, http.StatusBadRequest, fmt.Errorf("dest repo error: %s", err))
+		return
+	}
+
+	err = collectionFactory.LocalRepoCollection().LoadComplete(dstRepo)
+	if err != nil {
+		AbortWithJSONError(c, http.StatusBadRequest, fmt.Errorf("dest repo error: %s", err))
+		return
+	}
+
+	var (
+		srcRefList *deb.PackageRefList
+		srcRepo    *deb.LocalRepo
+	)
+
+	srcRepo, err = collectionFactory.LocalRepoCollection().ByName(srcRepoName)
+	if err != nil {
+		AbortWithJSONError(c, http.StatusBadRequest, fmt.Errorf("src repo error: %s", err))
+		return
+	}
+
+	if srcRepo.UUID == dstRepo.UUID {
+		AbortWithJSONError(c, http.StatusBadRequest, fmt.Errorf("dest and source are identical"))
+		return
+	}
+
+	err = collectionFactory.LocalRepoCollection().LoadComplete(srcRepo)
+	if err != nil {
+		AbortWithJSONError(c, http.StatusBadRequest, fmt.Errorf("src repo error: %s", err))
+		return
+	}
+
+	srcRefList = srcRepo.RefList()
+	taskName := fmt.Sprintf("Copy packages from repo %s to repo %s", srcRepoName, dstRepoName)
+	resources := []string{string(dstRepo.Key()), string(srcRepo.Key())}
+
+	maybeRunTaskInBackground(c, taskName, resources, func(_ aptly.Progress, _ *task.Detail) (*task.ProcessReturnValue, error) {
+		reporter := &aptly.RecordingResultReporter{
+			Warnings:     []string{},
+			AddedLines:   []string{},
+			RemovedLines: []string{},
+		}
+
+		dstList, err := deb.NewPackageListFromRefList(dstRepo.RefList(), collectionFactory.PackageCollection(), context.Progress())
+		if err != nil {
+			return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to load packages in dest: %s", err)
+
+		}
+
+		srcList, err := deb.NewPackageListFromRefList(srcRefList, collectionFactory.PackageCollection(), context.Progress())
+		if err != nil {
+			return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to load packages in src: %s", err)
+		}
+
+		srcList.PrepareIndex()
+
+		var architecturesList []string
+
+		if jsonBody.WithDeps {
+			dstList.PrepareIndex()
+
+			// Calculate architectures
+			if len(context.ArchitecturesList()) > 0 {
+				architecturesList = context.ArchitecturesList()
+			} else {
+				architecturesList = dstList.Architectures(false)
+			}
+
+			sort.Strings(architecturesList)
+
+			if len(architecturesList) == 0 {
+				return &task.ProcessReturnValue{Code: http.StatusUnprocessableEntity, Value: nil}, fmt.Errorf("unable to determine list of architectures, please specify explicitly")
+			}
+		}
+
+		// srcList.Filter|FilterWithProgress only accept query list
+		queries := make([]deb.PackageQuery, 1)
+		queries[0], err = query.Parse(fileName)
+		if err != nil {
+			return &task.ProcessReturnValue{Code: http.StatusUnprocessableEntity, Value: nil}, fmt.Errorf("unable to parse query '%s': %s", fileName, err)
+		}
+
+		toProcess, err := srcList.FilterWithProgress(queries, jsonBody.WithDeps, dstList, context.DependencyOptions(), architecturesList, context.Progress())
+		if err != nil {
+			return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("filter error: %s", err)
+		}
+
+		if toProcess.Len() == 0 {
+			return &task.ProcessReturnValue{Code: http.StatusUnprocessableEntity, Value: nil}, fmt.Errorf("no package found for filter: '%s'", fileName)
+		}
+
+		err = toProcess.ForEach(func(p *deb.Package) error {
+			err = dstList.Add(p)
+			if err != nil {
+				return err
+			}
+
+			name := fmt.Sprintf("added %s-%s(%s)", p.Name, p.Version, p.Architecture)
+			reporter.AddedLines = append(reporter.AddedLines, name)
+			return nil
+		})
+		if err != nil {
+			return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("error processing dest add: %s", err)
+		}
+
+		if jsonBody.DryRun {
+			reporter.Warning("Changes not saved, as dry run has been requested")
+		} else {
+			dstRepo.UpdateRefList(deb.NewPackageRefListFromPackageList(dstList))
+
+			err = collectionFactory.LocalRepoCollection().Update(dstRepo)
+			if err != nil {
+				return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to save: %s", err)
+			}
+		}
+
+		return &task.ProcessReturnValue{Code: http.StatusOK, Value: gin.H{
+			"Report": reporter,
+		}}, nil
+	})
+}
+
 // POST /repos/:name/include/:dir/:file
 func apiReposIncludePackageFromFile(c *gin.Context) {
 	// redirect all work to dir method
@@ -472,7 +617,7 @@ func apiReposIncludePackageFromDir(c *gin.Context) {
 	}
 	resources = append(resources, sources...)
 
-	maybeRunTaskInBackground(c, taskName, resources, func(out aptly.Progress, detail *task.Detail) (*task.ProcessReturnValue, error) {
+	maybeRunTaskInBackground(c, taskName, resources, func(out aptly.Progress, _ *task.Detail) (*task.ProcessReturnValue, error) {
 		var (
 			err                       error
 			verifier                  = context.GetVerifier()

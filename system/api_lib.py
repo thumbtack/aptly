@@ -7,6 +7,7 @@ import string
 import time
 
 from lib import BaseTest
+from testout import TestOut
 
 try:
     import requests
@@ -23,6 +24,8 @@ class APITest(BaseTest):
     BaseTest + testing aptly API
     """
     aptly_server = None
+    aptly_out = None
+    debugOutput = True
     base_url = "127.0.0.1:8765"
     configOverride = {
         "FileSystemPublishEndpoints": {
@@ -40,12 +43,19 @@ class APITest(BaseTest):
         if APITest.aptly_server is None:
             super(APITest, self).prepare()
 
+            APITest.aptly_out = TestOut()
+
             configPath = os.path.join(os.environ["HOME"], self.aptlyConfigFile)
-            APITest.aptly_server = self._start_process(f"aptly api serve -no-lock -config={configPath} -listen={self.base_url}",)
+            APITest.aptly_server = self._start_process(f"aptly api serve -no-lock -config={configPath} -listen={self.base_url}", stdout=APITest.aptly_out, stderr=APITest.aptly_out)
             time.sleep(1)
+        else:
+            APITest.aptly_out.clear()
 
         if os.path.exists(os.path.join(os.environ["HOME"], self.aptlyDir, "upload")):
             shutil.rmtree(os.path.join(os.environ["HOME"], self.aptlyDir, "upload"))
+
+    def debug_output(self):
+        return APITest.aptly_out.get_contents()
 
     def run(self):
         pass
@@ -78,6 +88,20 @@ class APITest(BaseTest):
         self.check_equal(resp.status_code, 200)
 
         return self.get("/api/tasks/" + str(_id))
+
+    def check_task(self, task):
+        self.check_equal(task.status_code, 200)
+        if task.json()['State'] != TASK_SUCCEEDED:
+            resp2 = self.get("/api/tasks/" + str(task.json()['ID']) + "/output")
+            raise Exception(f"task failed: {resp2.text}")
+
+    def check_task_fail(self, task, expected_output=None):
+        self.check_equal(task.status_code, 200)
+        if task.json()['State'] == TASK_SUCCEEDED:
+            raise Exception("task expected to fail")
+        if expected_output:
+            resp = self.get("/api/tasks/" + str(task.json()['ID']) + "/output")
+            self.check_equal(resp.json(), expected_output)
 
     def put(self, uri, *args, **kwargs):
         if "json" in kwargs:
@@ -142,6 +166,8 @@ class APITest(BaseTest):
             cls.aptly_server.terminate()
             cls.aptly_server.wait()
             cls.aptly_server = None
+        if APITest.aptly_out is not None:
+            APITest.aptly_out.close()
 
     def random_name(self):
         return ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(15))

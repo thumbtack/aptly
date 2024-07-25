@@ -43,14 +43,14 @@ func randString(n int) string {
 func (s *PublishedStorageSuite) SetUpSuite(c *C) {
 	s.accountName = os.Getenv("AZURE_STORAGE_ACCOUNT")
 	if s.accountName == "" {
-		println("Please set the the following two environment variables to run the Azure storage tests.")
+		println("Please set the following two environment variables to run the Azure storage tests.")
 		println("  1. AZURE_STORAGE_ACCOUNT")
 		println("  2. AZURE_STORAGE_ACCESS_KEY")
 		c.Skip("AZURE_STORAGE_ACCOUNT not set.")
 	}
 	s.accountKey = os.Getenv("AZURE_STORAGE_ACCESS_KEY")
 	if s.accountKey == "" {
-		println("Please set the the following two environment variables to run the Azure storage tests.")
+		println("Please set the following two environment variables to run the Azure storage tests.")
 		println("  1. AZURE_STORAGE_ACCOUNT")
 		println("  2. AZURE_STORAGE_ACCESS_KEY")
 		c.Skip("AZURE_STORAGE_ACCESS_KEY not set.")
@@ -66,7 +66,7 @@ func (s *PublishedStorageSuite) SetUpTest(c *C) {
 
 	s.storage, err = NewPublishedStorage(s.accountName, s.accountKey, container, "", s.endpoint)
 	c.Assert(err, IsNil)
-	cnt := s.storage.container
+	cnt := s.storage.az.container
 	_, err = cnt.Create(context.Background(), azblob.Metadata{}, azblob.PublicAccessContainer)
 	c.Assert(err, IsNil)
 
@@ -75,13 +75,13 @@ func (s *PublishedStorageSuite) SetUpTest(c *C) {
 }
 
 func (s *PublishedStorageSuite) TearDownTest(c *C) {
-	cnt := s.storage.container
+	cnt := s.storage.az.container
 	_, err := cnt.Delete(context.Background(), azblob.ContainerAccessConditions{})
 	c.Assert(err, IsNil)
 }
 
 func (s *PublishedStorageSuite) GetFile(c *C, path string) []byte {
-	blob := s.storage.container.NewBlobURL(path)
+	blob := s.storage.az.container.NewBlobURL(path)
 	resp, err := blob.Download(context.Background(), 0, azblob.CountToEnd, azblob.BlobAccessConditions{}, false, azblob.ClientProvidedKeyOptions{})
 	c.Assert(err, IsNil)
 	body := resp.Body(azblob.RetryReaderOptions{MaxRetryRequests: 3})
@@ -91,7 +91,7 @@ func (s *PublishedStorageSuite) GetFile(c *C, path string) []byte {
 }
 
 func (s *PublishedStorageSuite) AssertNoFile(c *C, path string) {
-	_, err := s.storage.container.NewBlobURL(path).GetProperties(
+	_, err := s.storage.az.container.NewBlobURL(path).GetProperties(
 		context.Background(), azblob.BlobAccessConditions{}, azblob.ClientProvidedKeyOptions{})
 	c.Assert(err, NotNil)
 	storageError, ok := err.(azblob.StorageError)
@@ -104,7 +104,7 @@ func (s *PublishedStorageSuite) PutFile(c *C, path string, data []byte) {
 	_, err := azblob.UploadBufferToBlockBlob(
 		context.Background(),
 		data,
-		s.storage.container.NewBlockBlobURL(path),
+		s.storage.az.container.NewBlockBlobURL(path),
 		azblob.UploadToBlockBlobOptions{
 			BlobHTTPHeaders: azblob.BlobHTTPHeaders{
 				ContentMD5: hash[:],
@@ -129,7 +129,7 @@ func (s *PublishedStorageSuite) TestPutFile(c *C) {
 	err = s.prefixedStorage.PutFile(filename, filepath.Join(dir, "a"))
 	c.Check(err, IsNil)
 
-	c.Check(s.GetFile(c, filepath.Join(s.prefixedStorage.prefix, filename)), DeepEquals, content)
+	c.Check(s.GetFile(c, filepath.Join(s.prefixedStorage.az.prefix, filename)), DeepEquals, content)
 }
 
 func (s *PublishedStorageSuite) TestPutFilePlus(c *C) {

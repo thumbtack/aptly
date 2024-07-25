@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/aptly-dev/aptly/aptly"
 	"github.com/aptly-dev/aptly/database"
@@ -189,7 +190,59 @@ func (s *PublishedRepoSuite) TestNewPublishedRepo(c *C) {
 	c.Check(err, ErrorMatches, "duplicate component name: main")
 
 	_, err = NewPublishedRepo("", ".", "wheezy/updates", nil, []string{"main"}, []interface{}{s.snapshot}, s.factory)
-	c.Check(err, ErrorMatches, "invalid distribution wheezy/updates, '/' is not allowed")
+	c.Check(err, IsNil)
+}
+
+func (s *PublishedRepoSuite) TestMultiDistPool(c *C) {
+	repo, err := NewPublishedRepo("", "ppa", "squeeze", nil, []string{"main"}, []interface{}{s.snapshot}, s.factory)
+	c.Assert(err, IsNil)
+	err = repo.Publish(s.packagePool, s.provider, s.factory, &NullSigner{}, nil, false, true)
+	c.Assert(err, IsNil)
+
+	publishedStorage := files.NewPublishedStorage(s.root, "", "")
+
+	c.Check(repo.Architectures, DeepEquals, []string{"i386"})
+
+	rf, err := os.Open(filepath.Join(publishedStorage.PublicPath(), "ppa/dists/squeeze/Release"))
+	c.Assert(err, IsNil)
+
+	cfr := NewControlFileReader(rf, true, false)
+	st, err := cfr.ReadStanza()
+	c.Assert(err, IsNil)
+
+	c.Check(st["Origin"], Equals, "ppa squeeze")
+	c.Check(st["Components"], Equals, "main")
+	c.Check(st["Architectures"], Equals, "i386")
+
+	pf, err := os.Open(filepath.Join(publishedStorage.PublicPath(), "ppa/dists/squeeze/main/binary-i386/Packages"))
+	c.Assert(err, IsNil)
+
+	cfr = NewControlFileReader(pf, false, false)
+
+	for i := 0; i < 3; i++ {
+		st, err = cfr.ReadStanza()
+		c.Assert(err, IsNil)
+
+		c.Check(st["Filename"], Equals, "pool/squeeze/main/a/alien-arena/alien-arena-common_7.40-2_i386.deb")
+	}
+
+	st, err = cfr.ReadStanza()
+	c.Assert(err, IsNil)
+	c.Assert(st, IsNil)
+
+	drf, err := os.Open(filepath.Join(publishedStorage.PublicPath(), "ppa/dists/squeeze/main/binary-i386/Release"))
+	c.Assert(err, IsNil)
+
+	cfr = NewControlFileReader(drf, true, false)
+	st, err = cfr.ReadStanza()
+	c.Assert(err, IsNil)
+
+	c.Check(st["Archive"], Equals, "squeeze")
+	c.Check(st["Architecture"], Equals, "i386")
+
+	_, err = os.Stat(filepath.Join(publishedStorage.PublicPath(), "ppa/pool/squeeze/main/a/alien-arena/alien-arena-common_7.40-2_i386.deb"))
+	c.Assert(err, IsNil)
+
 }
 
 func (s *PublishedRepoSuite) TestPrefixNormalization(c *C) {
@@ -294,7 +347,7 @@ func (s *PublishedRepoSuite) TestDistributionComponentGuessing(c *C) {
 
 	repo, err = NewPublishedRepo("", "ppa", "", nil, []string{""}, []interface{}{s.localRepo}, s.factory)
 	c.Check(err, IsNil)
-	c.Check(repo.Distribution, Equals, "precise-updates")
+	c.Check(repo.Distribution, Equals, "precise/updates")
 	c.Check(repo.Components(), DeepEquals, []string{"contrib"})
 
 	repo, err = NewPublishedRepo("", "ppa", "", nil, []string{"", "contrib"}, []interface{}{s.snapshot, s.snapshot2}, s.factory)
@@ -307,7 +360,7 @@ func (s *PublishedRepoSuite) TestDistributionComponentGuessing(c *C) {
 }
 
 func (s *PublishedRepoSuite) TestPublish(c *C) {
-	err := s.repo.Publish(s.packagePool, s.provider, s.factory, &NullSigner{}, nil, false)
+	err := s.repo.Publish(s.packagePool, s.provider, s.factory, &NullSigner{}, nil, false, false)
 	c.Assert(err, IsNil)
 
 	c.Check(s.repo.Architectures, DeepEquals, []string{"i386"})
@@ -354,7 +407,7 @@ func (s *PublishedRepoSuite) TestPublish(c *C) {
 }
 
 func (s *PublishedRepoSuite) TestPublishNoSigner(c *C) {
-	err := s.repo.Publish(s.packagePool, s.provider, s.factory, nil, nil, false)
+	err := s.repo.Publish(s.packagePool, s.provider, s.factory, nil, nil, false, false)
 	c.Assert(err, IsNil)
 
 	c.Check(filepath.Join(s.publishedStorage.PublicPath(), "ppa/dists/squeeze/Release"), PathExists)
@@ -362,7 +415,7 @@ func (s *PublishedRepoSuite) TestPublishNoSigner(c *C) {
 }
 
 func (s *PublishedRepoSuite) TestPublishLocalRepo(c *C) {
-	err := s.repo2.Publish(s.packagePool, s.provider, s.factory, nil, nil, false)
+	err := s.repo2.Publish(s.packagePool, s.provider, s.factory, nil, nil, false, false)
 	c.Assert(err, IsNil)
 
 	c.Check(filepath.Join(s.publishedStorage.PublicPath(), "ppa/dists/maverick/Release"), PathExists)
@@ -370,7 +423,7 @@ func (s *PublishedRepoSuite) TestPublishLocalRepo(c *C) {
 }
 
 func (s *PublishedRepoSuite) TestPublishLocalSourceRepo(c *C) {
-	err := s.repo4.Publish(s.packagePool, s.provider, s.factory, nil, nil, false)
+	err := s.repo4.Publish(s.packagePool, s.provider, s.factory, nil, nil, false, false)
 	c.Assert(err, IsNil)
 
 	c.Check(filepath.Join(s.publishedStorage.PublicPath(), "ppa/dists/maverick/Release"), PathExists)
@@ -378,7 +431,7 @@ func (s *PublishedRepoSuite) TestPublishLocalSourceRepo(c *C) {
 }
 
 func (s *PublishedRepoSuite) TestPublishOtherStorage(c *C) {
-	err := s.repo5.Publish(s.packagePool, s.provider, s.factory, nil, nil, false)
+	err := s.repo5.Publish(s.packagePool, s.provider, s.factory, nil, nil, false, false)
 	c.Assert(err, IsNil)
 
 	c.Check(filepath.Join(s.publishedStorage2.PublicPath(), "ppa/dists/maverick/Release"), PathExists)
@@ -450,13 +503,22 @@ type PublishedRepoCollectionSuite struct {
 var _ = Suite(&PublishedRepoCollectionSuite{})
 
 func (s *PublishedRepoCollectionSuite) SetUpTest(c *C) {
+	s.SetUpPackages()
+
 	s.db, _ = goleveldb.NewOpenDB(c.MkDir())
 	s.factory = NewCollectionFactory(s.db)
 
 	s.snapshotCollection = s.factory.SnapshotCollection()
 
-	s.snap1 = NewSnapshotFromPackageList("snap1", []*Snapshot{}, NewPackageList(), "desc1")
-	s.snap2 = NewSnapshotFromPackageList("snap2", []*Snapshot{}, NewPackageList(), "desc2")
+	snap1Refs := NewPackageRefList()
+	snap1Refs.Refs = [][]byte{s.p1.Key(""), s.p2.Key("")}
+	sort.Sort(snap1Refs)
+	s.snap1 = NewSnapshotFromRefList("snap1", []*Snapshot{}, snap1Refs, "desc1")
+
+	snap2Refs := NewPackageRefList()
+	snap2Refs.Refs = [][]byte{s.p3.Key("")}
+	sort.Sort(snap2Refs)
+	s.snap2 = NewSnapshotFromRefList("snap2", []*Snapshot{}, snap2Refs, "desc2")
 
 	s.snapshotCollection.Add(s.snap1)
 	s.snapshotCollection.Add(s.snap2)
@@ -534,7 +596,7 @@ func (s *PublishedRepoCollectionSuite) TestUpdateLoadComplete(c *C) {
 	c.Assert(r.sourceItems["main"].snapshot, IsNil)
 	c.Assert(s.collection.LoadComplete(r, s.factory), IsNil)
 	c.Assert(r.Sources["main"], Equals, s.repo1.sourceItems["main"].snapshot.UUID)
-	c.Assert(r.RefList("main").Len(), Equals, 0)
+	c.Assert(r.RefList("main").Len(), Equals, 2)
 
 	r, err = collection.ByStoragePrefixDistribution("", "ppa", "precise")
 	c.Assert(err, IsNil)
@@ -623,6 +685,51 @@ func (s *PublishedRepoCollectionSuite) TestByLocalRepo(c *C) {
 	c.Check(s.collection.Add(s.repo5), IsNil)
 
 	c.Check(s.collection.ByLocalRepo(s.localRepo), DeepEquals, []*PublishedRepo{s.repo4, s.repo5})
+}
+
+func (s *PublishedRepoCollectionSuite) TestListReferencedFiles(c *C) {
+	c.Check(s.factory.PackageCollection().Update(s.p1), IsNil)
+	c.Check(s.factory.PackageCollection().Update(s.p2), IsNil)
+	c.Check(s.factory.PackageCollection().Update(s.p3), IsNil)
+
+	c.Check(s.collection.Add(s.repo1), IsNil)
+	c.Check(s.collection.Add(s.repo2), IsNil)
+	c.Check(s.collection.Add(s.repo4), IsNil)
+	c.Check(s.collection.Add(s.repo5), IsNil)
+
+	files, err := s.collection.listReferencedFilesByComponent(".", []string{"main", "contrib"}, s.factory, nil)
+	c.Assert(err, IsNil)
+	for _, v := range files {
+		sort.Strings(v)
+	}
+	c.Check(files, DeepEquals, map[string][]string{
+		"contrib": {
+			"a/alien-arena/alien-arena-common_7.40-2_i386.deb",
+			"a/alien-arena/mars-invaders_7.40-2_i386.deb",
+		},
+		"main": {"a/alien-arena/lonely-strangers_7.40-2_i386.deb"},
+	})
+
+	snap3 := NewSnapshotFromRefList("snap3", []*Snapshot{}, s.snap2.RefList(), "desc3")
+	s.snapshotCollection.Add(snap3)
+
+	// Ensure that adding a second publish point with matching files doesn't give duplicate results.
+	repo3, err := NewPublishedRepo("", "", "anaconda-2", []string{}, []string{"main"}, []interface{}{snap3}, s.factory)
+	c.Check(err, IsNil)
+	c.Check(s.collection.Add(repo3), IsNil)
+
+	files, err = s.collection.listReferencedFilesByComponent(".", []string{"main", "contrib"}, s.factory, nil)
+	c.Assert(err, IsNil)
+	for _, v := range files {
+		sort.Strings(v)
+	}
+	c.Check(files, DeepEquals, map[string][]string{
+		"contrib": {
+			"a/alien-arena/alien-arena-common_7.40-2_i386.deb",
+			"a/alien-arena/mars-invaders_7.40-2_i386.deb",
+		},
+		"main": {"a/alien-arena/lonely-strangers_7.40-2_i386.deb"},
+	})
 }
 
 type PublishedRepoRemoveSuite struct {

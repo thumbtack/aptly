@@ -259,6 +259,9 @@ func (repo *RemoteRepo) UdebPath(component string, architecture string) string {
 // InstallerPath returns path of Packages files for given component and
 // architecture
 func (repo *RemoteRepo) InstallerPath(component string, architecture string) string {
+	if repo.Distribution == aptly.DistributionFocal {
+		return fmt.Sprintf("%s/installer-%s/current/legacy-images/SHA256SUMS", component, architecture)
+	}
 	return fmt.Sprintf("%s/installer-%s/current/images/SHA256SUMS", component, architecture)
 }
 
@@ -270,17 +273,29 @@ func (repo *RemoteRepo) PackageURL(filename string) *url.URL {
 }
 
 // Fetch updates information about repository
-func (repo *RemoteRepo) Fetch(d aptly.Downloader, verifier pgp.Verifier) error {
+func (repo *RemoteRepo) Fetch(d aptly.Downloader, verifier pgp.Verifier, ignoreSignatures bool) error {
 	var (
 		release, inrelease, releasesig *os.File
 		err                            error
 	)
 
-	if verifier == nil {
+	if ignoreSignatures {
 		// 0. Just download release file to temporary URL
 		release, err = http.DownloadTemp(gocontext.TODO(), d, repo.ReleaseURL("Release").String())
 		if err != nil {
-			return err
+			// 0.1 try downloading InRelease, ignore and strip signature
+			inrelease, err = http.DownloadTemp(gocontext.TODO(), d, repo.ReleaseURL("InRelease").String())
+			if err != nil {
+				return err
+			}
+			if verifier == nil {
+				return fmt.Errorf("no verifier specified")
+			}
+			release, err = verifier.ExtractClearsigned(inrelease)
+			if err != nil {
+				return err
+			}
+			goto ok
 		}
 	} else {
 		// 1. try InRelease file
@@ -428,8 +443,7 @@ ok:
 }
 
 // DownloadPackageIndexes downloads & parses package index files
-func (repo *RemoteRepo) DownloadPackageIndexes(progress aptly.Progress, d aptly.Downloader, verifier pgp.Verifier, _ *CollectionFactory,
-	ignoreMismatch bool) error {
+func (repo *RemoteRepo) DownloadPackageIndexes(progress aptly.Progress, d aptly.Downloader, verifier pgp.Verifier, _ *CollectionFactory, ignoreSignatures bool, ignoreChecksums bool) error {
 	if repo.packageList != nil {
 		panic("packageList != nil")
 	}
@@ -462,14 +476,14 @@ func (repo *RemoteRepo) DownloadPackageIndexes(progress aptly.Progress, d aptly.
 
 	for _, info := range packagesPaths {
 		path, kind, component, architecture := info[0], info[1], info[2], info[3]
-		packagesReader, packagesFile, err := http.DownloadTryCompression(gocontext.TODO(), d, repo.IndexesRootURL(), path, repo.ReleaseFiles, ignoreMismatch)
+		packagesReader, packagesFile, err := http.DownloadTryCompression(gocontext.TODO(), d, repo.IndexesRootURL(), path, repo.ReleaseFiles, ignoreChecksums)
 
 		isInstaller := kind == PackageTypeInstaller
 		if err != nil {
 			if _, ok := err.(*http.NoCandidateFoundError); isInstaller && ok {
 				// checking if gpg file is only needed when checksums matches are required.
 				// otherwise there actually has been no candidate found and we can continue
-				if ignoreMismatch {
+				if ignoreChecksums {
 					continue
 				}
 
@@ -486,7 +500,7 @@ func (repo *RemoteRepo) DownloadPackageIndexes(progress aptly.Progress, d aptly.
 					return err
 				}
 
-				if verifier != nil {
+				if verifier != nil && !ignoreSignatures {
 					hashsumGpgPath := repo.IndexesRootURL().ResolveReference(&url.URL{Path: path + ".gpg"}).String()
 					var filesig *os.File
 					filesig, err = http.DownloadTemp(gocontext.TODO(), d, hashsumGpgPath)
@@ -777,7 +791,7 @@ func (collection *RemoteRepoCollection) search(filter func(*RemoteRepo) bool, un
 		return result
 	}
 
-	collection.db.ProcessByPrefix([]byte("R"), func(key, blob []byte) error {
+	collection.db.ProcessByPrefix([]byte("R"), func(_, blob []byte) error {
 		r := &RemoteRepo{}
 		if err := r.Decode(blob); err != nil {
 			log.Printf("Error decoding remote repo: %s\n", err)
@@ -880,7 +894,7 @@ func (collection *RemoteRepoCollection) ByUUID(uuid string) (*RemoteRepo, error)
 
 // ForEach runs method for each repository
 func (collection *RemoteRepoCollection) ForEach(handler func(*RemoteRepo) error) error {
-	return collection.db.ProcessByPrefix([]byte("R"), func(key, blob []byte) error {
+	return collection.db.ProcessByPrefix([]byte("R"), func(_, blob []byte) error {
 		r := &RemoteRepo{}
 		if err := r.Decode(blob); err != nil {
 			log.Printf("Error decoding mirror: %s\n", err)

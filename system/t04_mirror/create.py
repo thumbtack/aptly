@@ -361,7 +361,7 @@ class CreateMirror27Test(BaseTest):
     """
     create mirror: component with slashes, no stripping
     """
-    runCmd = "aptly mirror create --ignore-signatures mirror27 https://mirror.chpc.utah.edu/pub/linux.dell.com/repo/community/ubuntu wheezy openmanage/740"
+    runCmd = "aptly mirror create --ignore-signatures mirror27 http://repo.aptly.info/system-tests/mirror.chpc.utah.edu/pub/linux.dell.com/repo/community/ubuntu wheezy openmanage/740"
 
     def outputMatchPrepare(self, s):
         return self.strip_retry_lines(s)
@@ -436,3 +436,17 @@ class CreateMirror32Test(BaseTest):
     def check(self):
         self.check_output()
         self.check_cmd_output("aptly mirror show mirror32", "mirror_show")
+
+
+class CreateMirror33Test(BaseTest):
+    """
+    create mirror: repo with only InRelease file but no verification
+    """
+    configOverride = {"max-tries": 1}
+    runCmd = "aptly mirror create -ignore-signatures mirror33 http://repo.aptly.info/system-tests/nvidia.github.io/libnvidia-container/stable/ubuntu16.04/amd64 ./"
+    fixtureGpg = False
+    requiresGPG2 = False
+
+    def check(self):
+        self.check_output()
+        self.check_cmd_output("aptly mirror show mirror33", "mirror_show")

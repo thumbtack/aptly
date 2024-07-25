@@ -173,7 +173,7 @@ class UpdateMirror11Test(BaseTest):
     requiresFTP = True
     fixtureCmds = [
         "aptly mirror create -keyring=aptlytest.gpg -filter='Priority (required), Name (% s*)' "
-        "-architectures=i386 stretch-main https://snapshot.debian.org/archive/debian/20220201T025006Z/ stretch main",
+        "-architectures=i386 stretch-main http://repo.aptly.info/system-tests/snapshot.debian.org/archive/debian/20220201T025006Z/ stretch main",
     ]
     outputMatchPrepare = filterOutSignature
     runCmd = "aptly mirror update -keyring=aptlytest.gpg stretch-main"
@@ -355,7 +355,7 @@ class UpdateMirror20Test(BaseTest):
     fixtureGpg = True
     configOverride = {"gpgProvider": "internal"}
     fixtureCmds = [
-        "gpg --no-default-keyring --keyring aptlytest.gpg --export-options export-minimal --export -o " + os.path.join(
+        "gpg --no-default-keyring --keyring aptlytest.gpg --export -o " + os.path.join(
             os.environ["HOME"], ".gnupg/aptlytest-gpg1.gpg"),
         "aptly mirror create --keyring=aptlytest-gpg1.gpg -architectures=amd64 --filter='r-cran-class' flat http://repo.aptly.info/system-tests/cloud.r-project.org/bin/linux/debian bullseye-cran40/",
     ]
@@ -374,7 +374,7 @@ class UpdateMirror21Test(BaseTest):
     configOverride = {"gpgProvider": "internal", "max-tries": 1}
     fixtureGpg = True
     fixtureCmds = [
-        "gpg --no-default-keyring --keyring aptlytest.gpg --export-options export-minimal --export -o " + os.path.join(
+        "gpg --no-default-keyring --keyring aptlytest.gpg --export -o " + os.path.join(
             os.environ["HOME"], ".gnupg/aptlytest-gpg1.gpg"),
         "aptly mirror create --keyring=aptlytest-gpg1.gpg pagerduty http://repo.aptly.info/system-tests/packages.pagerduty.com/pdagent deb/"
     ]
@@ -395,7 +395,7 @@ class UpdateMirror22Test(BaseTest):
     configOverride = {"gpgProvider": "internal"}
     fixtureGpg = True
     fixtureCmds = [
-        "gpg --no-default-keyring --keyring aptlytest.gpg --export-options export-minimal --export -o " + os.path.join(
+        "gpg --no-default-keyring --keyring aptlytest.gpg --export -o " + os.path.join(
             os.environ["HOME"], ".gnupg/aptlytest-gpg1.gpg"),
         "aptly mirror create --keyring=aptlytest-gpg1.gpg --filter=nomatch libnvidia-container http://repo.aptly.info/system-tests/nvidia.github.io/libnvidia-container/stable/ubuntu16.04/amd64 ./"
     ]
@@ -435,4 +435,19 @@ class UpdateMirror24Test(BaseTest):
         "aptly -architectures=amd64 mirror create -keyring=aptlytest.gpg -filter='installer' -with-installer trusty http://repo.aptly.info/system-tests/us.archive.ubuntu.com/ubuntu/ trusty main restricted",
     ]
     runCmd = "aptly mirror update -keyring=aptlytest.gpg trusty"
+    outputMatchPrepare = filterOutSignature
+
+
+class UpdateMirror25Test(BaseTest):
+    """
+    update mirrors: mirror with / in distribution
+    """
+    configOverride = {"max-tries": 1}
+    sortOutput = True
+    longTest = False
+    fixtureGpg = True
+    fixtureCmds = [
+        "aptly -architectures='i386' mirror create -keyring=aptlytest.gpg -with-sources mirror19 http://repo.aptly.info/system-tests/archive.debian.org/debian-security/ stretch/updates main"
+    ]
+    runCmd = "aptly mirror update -keyring=aptlytest.gpg mirror19"
     outputMatchPrepare = filterOutSignature

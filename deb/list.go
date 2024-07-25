@@ -351,7 +351,7 @@ func (l *PackageList) VerifyDependencies(options int, architectures []string, so
 						cache[hash] = satisfied
 					}
 
-					if !satisfied && !ok {
+					if !satisfied {
 						variantsMissing = append(variantsMissing, dep)
 					}
 
@@ -365,6 +365,8 @@ func (l *PackageList) VerifyDependencies(options int, architectures []string, so
 			}
 		}
 	}
+
+	missing = depSliceDeduplicate(missing)
 
 	if progress != nil {
 		progress.ShutdownBar()

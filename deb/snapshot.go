@@ -45,7 +45,7 @@ type Snapshot struct {
 
 // NewSnapshotFromRepository creates snapshot from current state of repository
 func NewSnapshotFromRepository(name string, repo *RemoteRepo) (*Snapshot, error) {
-	if repo.packageRefs == nil {
+	if repo.packageRefs == nil || repo.packageRefs.Len() == 0 {
 		return nil, errors.New("mirror not updated")
 	}
 
@@ -259,7 +259,7 @@ func (collection *SnapshotCollection) search(filter func(*Snapshot) bool, unique
 		return result
 	}
 
-	collection.db.ProcessByPrefix([]byte("S"), func(key, blob []byte) error {
+	collection.db.ProcessByPrefix([]byte("S"), func(_, blob []byte) error {
 		s := &Snapshot{}
 		if err := s.Decode(blob); err != nil {
 			log.Printf("Error decoding snapshot: %s\n", err)
@@ -341,7 +341,7 @@ func (collection *SnapshotCollection) BySnapshotSource(snapshot *Snapshot) []*Sn
 
 // ForEach runs method for each snapshot
 func (collection *SnapshotCollection) ForEach(handler func(*Snapshot) error) error {
-	return collection.db.ProcessByPrefix([]byte("S"), func(key, blob []byte) error {
+	return collection.db.ProcessByPrefix([]byte("S"), func(_, blob []byte) error {
 		s := &Snapshot{}
 		if err := s.Decode(blob); err != nil {
 			log.Printf("Error decoding snapshot: %s\n", err)

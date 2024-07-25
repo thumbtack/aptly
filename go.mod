@@ -1,6 +1,6 @@
 module github.com/aptly-dev/aptly
 
-go 1.21
+go 1.19
 
 require (
 	github.com/AlekSi/pointer v1.2.0
@@ -26,6 +26,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.16.0
 	github.com/rs/zerolog v1.30.0
+	github.com/saracen/walker v0.1.3
 	github.com/smira/commander v0.0.0-20140515201010-f408b00e68d5
 	github.com/smira/flag v0.0.0-20170926215700-695ea5e84e76
 	github.com/smira/go-ftp-protocol v0.0.0-20140829150050-066b75c2b70d
@@ -33,11 +34,11 @@ require (
 	github.com/syndtr/goleveldb v1.0.1-0.20190923125748-758128399b1d
 	github.com/ugorji/go/codec v1.2.11
 	github.com/wsxiaoys/terminal v0.0.0-20160513160801-0940f3fc43a0
-	golang.org/x/crypto v0.17.0 // indirect
-	golang.org/x/sys v0.15.0
-	golang.org/x/term v0.15.0
+	golang.org/x/crypto v0.21.0 // indirect
+	golang.org/x/sys v0.18.0
+	golang.org/x/term v0.18.0
 	golang.org/x/time v0.3.0
-	google.golang.org/protobuf v1.31.0 // indirect
+	google.golang.org/protobuf v1.33.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 )
 
@@ -90,14 +91,14 @@ require (
 	github.com/rogpeppe/go-internal v1.10.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	golang.org/x/arch v0.5.0 // indirect
-	golang.org/x/crypto v0.17.0 // indirect
-	golang.org/x/net v0.17.0 // indirect
+	golang.org/x/net v0.23.0 // indirect
+	golang.org/x/sync v0.3.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 require (
-	github.com/ProtonMail/go-crypto v0.0.0-20230923063757-afb1ddc0824c
+	github.com/ProtonMail/go-crypto v1.0.0
 	github.com/aws/aws-sdk-go-v2 v1.21.2
 	github.com/aws/aws-sdk-go-v2/config v1.18.45
 	github.com/aws/aws-sdk-go-v2/credentials v1.13.43

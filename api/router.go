@@ -116,6 +116,7 @@ func Router(c *ctx.AptlyContext) http.Handler {
 
 		api.POST("/repos/:name/file/:dir/:file", apiReposPackageFromFile)
 		api.POST("/repos/:name/file/:dir", apiReposPackageFromDir)
+		api.POST("/repos/:name/copy/:src/:file", apiReposCopyPackage)
 
 		api.POST("/repos/:name/include/:dir/:file", apiReposIncludePackageFromFile)
 		api.POST("/repos/:name/include/:dir", apiReposIncludePackageFromDir)
@@ -138,6 +139,10 @@ func Router(c *ctx.AptlyContext) http.Handler {
 
 	{
 		api.POST("/gpg/key", apiGPGAddKey)
+	}
+
+	{
+		api.GET("/s3", apiS3List)
 	}
 
 	{

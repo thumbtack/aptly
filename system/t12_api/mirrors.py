@@ -1,4 +1,4 @@
-from api_lib import TASK_SUCCEEDED, APITest
+from api_lib import APITest
 
 
 class MirrorsAPITestCreateShow(APITest):
@@ -58,11 +58,8 @@ class MirrorsAPITestCreateUpdate(APITest):
 
         mirror_desc["Name"] = self.random_name()
         resp = self.put_task("/api/mirrors/" + mirror_name, json=mirror_desc)
-        self.check_equal(resp.status_code, 200)
+        self.check_task(resp)
         _id = resp.json()['ID']
-        if resp.json()["State"] != TASK_SUCCEEDED:
-            resp = self.get("/api/tasks/" + str(_id) + "/output")
-            raise Exception("task failed: " + str(resp.json()))
 
         resp = self.get("/api/tasks/" + str(_id) + "/detail")
         self.check_equal(resp.status_code, 200)
@@ -95,7 +92,7 @@ class MirrorsAPITestCreateDelete(APITest):
         self.check_equal(resp.status_code, 201)
 
         resp = self.delete_task("/api/mirrors/" + mirror_name)
-        self.check_equal(resp.json()['State'], TASK_SUCCEEDED)
+        self.check_task(resp)
 
 
 class MirrorsAPITestCreateList(APITest):
@@ -120,3 +117,38 @@ class MirrorsAPITestCreateList(APITest):
         resp = self.get("/api/mirrors")
         self.check_equal(resp.status_code, 200)
         self.check_equal(len(resp.json()), count + 1)
+
+
+class MirrorsAPITestSkipArchitectureCheck(APITest):
+    """
+    GET /api/mirrors, POST /api/mirrors, GET /api/mirrors
+
+    This tests SkipArchitectureCheck and IgnoreSignatures via API.
+    The repo to be mirrored requires the SkipArchitectureCheck and SkipComponentCheck in order to be mirrored.
+    """
+    def check(self):
+        resp = self.get("/api/mirrors")
+        self.check_equal(resp.status_code, 200)
+        count = len(resp.json())
+
+        mirror_name = self.random_name()
+        mirror_desc = {'Name': mirror_name,
+                       'ArchiveURL': 'http://repo.aptly.info/system-tests/pkg.duosecurity.com/Debian',
+                       'Architectures': ['amd64', 'i386'],
+                       'SkipArchitectureCheck': True,
+                       'SkipComponentCheck': True,
+                       'IgnoreSignatures': True,
+                       'Distribution': 'bookworm',
+                       'Components': ['main']}
+
+        resp = self.post("/api/mirrors", json=mirror_desc)
+        self.check_equal(resp.status_code, 201)
+
+        resp = self.get("/api/mirrors")
+        self.check_equal(resp.status_code, 200)
+        self.check_equal(len(resp.json()), count + 1)
+
+        mirror_desc = {'Name': mirror_name,
+                       'IgnoreSignatures': True}
+        resp = self.put_task("/api/mirrors/" + mirror_name, json=mirror_desc)
+        self.check_task(resp)
